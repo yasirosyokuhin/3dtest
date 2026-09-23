@@ -3,15 +3,17 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { skin, makeStrands, makeHair } = require('./head');
-const { sampleGrid, gridSampler, surfaceNets, relax } = require('./mesher');
-const { cylindricalUVs } = require('./uv');
-const { paintSkin, paintHair } = require('./paint');
+const { skin } = require('./head');
+const { headGrid } = require('./topo');
+const { buildHair } = require('./hair');
+const { sampleGrid, gridSampler } = require('./mesher');
+const { bakeTexture } = require('./bake');
+const { skinShader, hairShader } = require('./paint');
 const { encodePNG } = require('./png');
 const { writeGLB } = require('./glb');
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.replace(/^--/, '').split('=')));
-const RES = parseFloat(args.res || '0.011');
+const RES = parseFloat(args.res || '0.014'); // SDF grid used for AO only
 const TEX = parseInt(args.tex || '2048', 10);
 const OUT = path.resolve(args.out || path.join(__dirname, '..', 'output'));
 const log = (...m) => console.log(`[${(process.uptime()).toFixed(1)}s]`, ...m);
@@ -66,53 +68,34 @@ function smoothScalar(mesh, val, iters) {
 
 function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  const strands = makeStrands(7);
-  const hair = makeHair(strands);
-  log(`grid spacing ${RES}, ${strands.length} hair clumps`);
+  const face = headGrid(skin);
+  log(`face: ${face.positions.length / 3} verts, ${face.indices.length / 3} tris (quad grid)`);
+  const hair = buildHair();
+  log(`hair: ${hair.strands.length} clumps, ${hair.positions.length / 3} verts, ${hair.indices.length / 3} tris`);
 
-  const gSkin = sampleGrid(skin, BOUNDS, RES);
-  log(`skin sampled (${gSkin.nx}x${gSkin.ny}x${gSkin.nz}, ${gSkin.evals} fine evals)`);
-  const gHair = sampleGrid(hair, BOUNDS, RES);
-  log(`hair sampled (${gHair.evals} fine evals)`);
-
-  const skinMesh = relax(surfaceNets(gSkin, skin), skin, 3);
-  log(`skin mesh: ${skinMesh.positions.length / 3} verts, ${skinMesh.indices.length / 3} tris`);
-  const hairMesh = relax(surfaceNets(gHair, hair), hair, 2);
-  log(`hair mesh: ${hairMesh.positions.length / 3} verts, ${hairMesh.indices.length / 3} tris`);
-
-  const sSkin = gridSampler(gSkin), sHair = gridSampler(gHair);
+  const sSkin = gridSampler(sampleGrid(skin, BOUNDS, RES));
+  const sHair = gridSampler(sampleGrid(hair.sdf, BOUNDS, RES));
   const scene = (x, y, z) => Math.min(sSkin(x, y, z), sHair(x, y, z));
-  const aoSkin = smoothScalar(skinMesh, bakeAO(skinMesh, scene, { rays: 40 }), 6);
-  const aoHair = smoothScalar(hairMesh, bakeAO(hairMesh, scene, { rays: 32 }), 4);
+  const aoFace = smoothScalar(face, bakeAO(face, scene, { rays: 48 }), 3);
+  const aoHair = smoothScalar(hair, bakeAO(hair, scene, { rays: 32 }), 2);
   log('ambient occlusion baked');
 
-  // Vertex colours: AO tinted warm on skin (fake subsurface), neutral on hair.
-  const colorize = (ao, tint) => {
-    const c = new Float32Array(ao.length * 4);
-    for (let i = 0; i < ao.length; i++) {
-      const a = Math.min(1, ao[i] * 1.12);
-      c[4 * i] = Math.pow(a, tint[0]); c[4 * i + 1] = Math.pow(a, tint[1]); c[4 * i + 2] = Math.pow(a, tint[2]); c[4 * i + 3] = 1;
-    }
-    return c;
-  };
-  const skinUV = cylindricalUVs(skinMesh, [{ size: 4, data: colorize(aoSkin, [0.55, 1.0, 1.05]) }]);
-  const hairUV = cylindricalUVs(hairMesh, [{ size: 4, data: colorize(aoHair, [1.0, 1.05, 1.1]) }]);
-
-  const skinTex = encodePNG(TEX, TEX, paintSkin(TEX, skin));
-  log('skin texture painted');
-  const hairTex = encodePNG(TEX, TEX, paintHair(TEX));
-  log('hair texture painted');
+  const skinTex = encodePNG(TEX, TEX, bakeTexture(face, { ao: aoFace }, TEX, skinShader()));
+  log('face texture baked');
+  const hairTex = encodePNG(TEX, TEX, bakeTexture(hair, { ao: aoHair, t: hair.attrs.t, a: hair.attrs.a, id: hair.attrs.id }, TEX, hairShader()));
+  log('hair texture baked');
   fs.writeFileSync(path.join(OUT, 'anime_head_skin.png'), skinTex);
   fs.writeFileSync(path.join(OUT, 'anime_head_hair.png'), hairTex);
 
   const meshes = [
-    { name: 'Face', positions: skinUV.positions, normals: skinUV.normals, uvs: skinUV.uvs, colors: skinUV.extras[0], indices: skinUV.indices, png: skinTex, roughness: 0.65 },
-    { name: 'Hair', positions: hairUV.positions, normals: hairUV.normals, uvs: hairUV.uvs, colors: hairUV.extras[0], indices: hairUV.indices, png: hairTex, roughness: 0.45 },
+    { name: 'Face', positions: face.positions, normals: face.normals, uvs: face.uvs, indices: face.indices, png: skinTex, roughness: 0.7 },
+    { name: 'Hair', positions: hair.positions, normals: hair.normals, uvs: hair.uvs, indices: hair.indices, png: hairTex, roughness: 0.5 },
   ];
   meshes.scale = 0.12; // ~24 cm crown-to-chin, in metres
   const glb = writeGLB(meshes);
   fs.writeFileSync(path.join(OUT, 'anime_head.glb'), glb);
-  log(`wrote ${path.join(OUT, 'anime_head.glb')} (${(glb.length / 1e6).toFixed(1)} MB)`);
+  const tris = meshes.reduce((n, m) => n + m.indices.length / 3, 0);
+  log(`wrote ${path.join(OUT, 'anime_head.glb')} (${(glb.length / 1e6).toFixed(1)} MB, ${tris} tris)`);
 }
 
 main();

@@ -35,15 +35,16 @@ const msg = document.getElementById('msg');
 
 const VS = `#version 300 es
 layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNor; layout(location=2) in vec2 aUV; layout(location=3) in vec4 aCol;
-uniform mat4 uMVP, uModel; out vec3 vN; out vec2 vUV; out vec4 vCol; out vec3 vW;
-void main(){ vec4 w = uModel * vec4(aPos,1.); vW = w.xyz; vN = mat3(uModel) * aNor; vUV = aUV; vCol = aCol; gl_Position = uMVP * vec4(aPos,1.); }`;
+uniform mat4 uMVP, uModel; uniform float uOutline; out vec3 vN; out vec2 vUV; out vec4 vCol; out vec3 vW;
+void main(){ vec3 p = aPos + aNor * uOutline; vec4 w = uModel * vec4(p,1.); vW = w.xyz; vN = mat3(uModel) * aNor; vUV = aUV; vCol = aCol; gl_Position = uMVP * vec4(p,1.); }`;
 const FS = `#version 300 es
 precision highp float;
 in vec3 vN; in vec2 vUV; in vec4 vCol; in vec3 vW; out vec4 o;
-uniform sampler2D uTex; uniform vec3 uEye; uniform int uMode; uniform float uRough;
+uniform sampler2D uTex; uniform vec3 uEye; uniform int uMode; uniform float uRough; uniform vec4 uFlat;
 vec3 toLin(vec3 c){ return pow(c, vec3(2.2)); }
 void main(){
-  vec3 base = toLin(texture(uTex, vUV).rgb) * toLin(vCol.rgb);
+  if (uFlat.a > 0.) { o = vec4(uFlat.rgb * (uFlat.a > 1.5 ? toLin(texture(uTex, vUV).rgb) * 0.45 : vec3(1.)), 1.); return; }
+  vec3 base = uMode == 2 ? vec3(0.62) : toLin(texture(uTex, vUV).rgb) * toLin(vCol.rgb);
   vec3 N = normalize(vN); vec3 V = normalize(uEye - vW);
   vec3 L = normalize(vec3(-0.45, 0.65, 0.75));
   float ndl = dot(N, L);
@@ -56,6 +57,7 @@ void main(){
     float rim = pow(1. - max(dot(N, V), 0.), 4.) * smoothstep(-0.2, 0.4, ndl + 0.3);
     col += rim * 0.18 * base;
   } else {
+    if (uMode == 2) L = normalize(vec3(-0.3, 0.5, 0.8));
     vec3 H = normalize(L + V);
     float spec = pow(max(dot(N, H), 0.), mix(64., 8., uRough)) * (1. - uRough) * 0.35;
     float hemi = 0.5 + 0.5 * N.y;
@@ -117,7 +119,21 @@ async function loadGLB(buf) {
     const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, viewBytes(ia.bufferView), gl.STATIC_DRAW);
     const mat = json.materials[p.material];
     const texIdx = mat.pbrMetallicRoughness.baseColorTexture.index;
-    draws.push({ vao, count: ia.count, tex: textures[json.textures[texIdx].source], rough: mat.pbrMetallicRoughness.roughnessFactor ?? 0.6 });
+    // Wireframe edges without quad diagonals (skip each triangle's longest edge if shared).
+    const idx = new Uint32Array(buf, binOff + (json.bufferViews[ia.bufferView].byteOffset || 0), ia.count);
+    const pa = json.accessors[p.attributes.POSITION], P = new Float32Array(buf, binOff + (json.bufferViews[pa.bufferView].byteOffset || 0), pa.count * 3);
+    const d2 = (a, b) => (P[3*a]-P[3*b])**2 + (P[3*a+1]-P[3*b+1])**2 + (P[3*a+2]-P[3*b+2])**2;
+    const key = (a, b) => a < b ? a * 4294967296 + b : b * 4294967296 + a;
+    const longest = new Map(), all = new Map();
+    for (let t = 0; t < idx.length; t += 3) {
+      const e = [[idx[t], idx[t+1]], [idx[t+1], idx[t+2]], [idx[t+2], idx[t]]];
+      let li = 0; for (let k = 1; k < 3; k++) if (d2(...e[k]) > d2(...e[li])) li = k;
+      e.forEach((ed, k) => { const kk = key(...ed); all.set(kk, ed); if (k === li) longest.set(kk, (longest.get(kk) || 0) + 1); });
+    }
+    const lines = []; for (const [kk, ed] of all) if ((longest.get(kk) || 0) < 2) lines.push(ed[0], ed[1]);
+    const lb = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lb); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(lines), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    draws.push({ vao, ib, lb, lineCount: lines.length, count: ia.count, tex: textures[json.textures[texIdx].source], rough: mat.pbrMetallicRoughness.roughnessFactor ?? 0.6 });
   }
   rootScale = (json.nodes[0].scale || [1])[0];
   center = [0, (lo[1] + hi[1]) / 2 * 0.9 + 0.1, 0];
@@ -125,10 +141,11 @@ async function loadGLB(buf) {
   msg.textContent = '';
 }
 
-let yaw = 0, pitch = 0.05, dist = 4.3, mode = 0, spin = false, ready = false;
+let yaw = 0, pitch = 0.05, dist = 4.3, mode = 0, outline = true, spin = false, ready = false;
 const views = { front: [0, 0.05], three: [0.6, 0.1], side: [Math.PI / 2, 0.05], back: [Math.PI, 0.1] };
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { [yaw, pitch] = views[b.dataset.view]; });
-document.getElementById('shade').onclick = e => { mode ^= 1; e.target.textContent = 'Shading: ' + (mode ? 'lit' : 'anime'); };
+const MODES = ['anime', 'lit', 'clay + wire'];
+document.getElementById('shade').onclick = e => { mode = (mode + 1) % 3; e.target.textContent = 'Shading: ' + MODES[mode]; };
 document.getElementById('spin').onclick = e => { spin = !spin; e.target.textContent = 'Spin: ' + (spin ? 'on' : 'off'); };
 document.getElementById('file').onchange = async e => { const f = e.target.files[0]; if (f) await loadGLB(await f.arrayBuffer()); };
 
@@ -153,10 +170,23 @@ function frame() {
     gl.useProgram(prog);
     gl.uniformMatrix4fv(U('uMVP'), false, M.mul(vp, model)); gl.uniformMatrix4fv(U('uModel'), false, model);
     gl.uniform3fv(U('uEye'), eye); gl.uniform1i(U('uMode'), mode); gl.uniform1i(U('uTex'), 0);
+    const ob = rootScale ? 0.012 : 0;
     for (const d of draws) {
       gl.bindVertexArray(d.vao); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, d.tex);
       gl.uniform1f(U('uRough'), d.rough);
-      gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, 0);
+      gl.uniform1f(U('uOutline'), 0); gl.uniform4f(U('uFlat'), 0, 0, 0, 0);
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 1);
+      gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, 0);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      if (mode === 0 && outline) { // inverted-hull toon outline
+        gl.uniform1f(U('uOutline'), ob); gl.uniform4f(U('uFlat'), 0.35, 0.22, 0.24, 2.0);
+        gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, 0); gl.cullFace(gl.BACK);
+      }
+      if (mode === 2) {
+        gl.uniform1f(U('uOutline'), 0); gl.uniform4f(U('uFlat'), 0.16, 0.16, 0.18, 1.0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, d.lb); gl.drawElements(gl.LINES, d.lineCount, gl.UNSIGNED_INT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, d.ib);
+      }
     }
     ready = true;
   }
@@ -166,7 +196,7 @@ requestAnimationFrame(frame);
 
 const params = new URLSearchParams(location.search);
 if (params.get('view') && views[params.get('view')]) [yaw, pitch] = views[params.get('view')];
-if (params.get('mode') === 'lit') mode = 1;
+if (MODES.indexOf(params.get('mode')) > 0) mode = MODES.indexOf(params.get('mode'));
 fetch(params.get('src') || 'anime_head.glb').then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
   .then(loadGLB).catch(e => { msg.textContent = 'Could not load model (' + e.message + '). Use "GLB…" to open one.'; });
 window.__ready = () => ready;

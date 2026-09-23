@@ -1,26 +1,31 @@
-// Procedural "hand painted" albedo textures in the cylindrical UV layout.
-// Facial features are authored in front-view coordinates (X, Y) and projected
-// onto the actual sculpted surface, so they stay undistorted from the front.
+// Texel shaders for the UV baker. Facial features are authored in front-view
+// coordinates (X, Y) of the surface point, so they stay undistorted from the
+// front no matter how the mesh is unwrapped.
 'use strict';
-const { uToTheta, vToY } = require('./uv');
 const { clamp, mix, smoothstep } = require('./sdf');
 
 const hex = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 
 const DEFAULT_PALETTE = {
-  skin: '#ffe8dc', skinShade: '#f6c9bd', blush: '#ff8f9f',
-  irisTop: '#1b2250', irisMid: '#2f6fb8', irisBottom: '#6fd3f5', irisGlow: '#c8f6ff', pupil: '#0d1030',
-  sclera: '#fffdfd', scleraShade: '#b9bfe3', lash: '#2a1714', lowerLash: '#7a4038', crease: '#c98e84',
-  brow: '#5a3328', mouth: '#a8434e', nose: '#e59c90',
-  hairDark: '#2f1b1a', hair: '#6a3f33', hairLight: '#a9705c', hairShine: '#f2cdb6',
+  skin: '#fff0e8', skinShade: '#f5c6bc', blush: '#ff8ea4',
+  irisTop: '#241640', irisMid: '#6246b0', irisBottom: '#e896d8', irisGlow: '#ffe0f6', pupil: '#140c26',
+  sclera: '#ffffff', scleraShade: '#c7c3ea', lash: '#2b1616', lowerLash: '#8a4a48', crease: '#d49a90',
+  brow: '#7a4a3e', mouth: '#6e2432', mouthIn: '#b33a50', tongue: '#f58c98', nose: '#eaa296',
+  hairDark: '#4b2a26', hair: '#94604e', hairLight: '#c9927a', hairShine: '#fbe6d6',
 };
+
+function palette(over = {}) {
+  const pal = {};
+  for (const [k, v] of Object.entries(Object.assign({}, DEFAULT_PALETTE, over))) pal[k] = hex(v);
+  return pal;
+}
 
 function blend(c, col, a) {
   if (a <= 0) return;
+  if (a > 1) a = 1;
   c[0] += (col[0] - c[0]) * a; c[1] += (col[1] - c[1]) * a; c[2] += (col[2] - c[2]) * a;
 }
 
-// Distance to a polyline with per-point radius (negative inside the stroke).
 function strokeDist(x, y, pts) {
   let best = Infinity;
   for (let i = 0; i + 1 < pts.length; i++) {
@@ -33,225 +38,196 @@ function strokeDist(x, y, pts) {
   return best;
 }
 
-// ------------------------------------------------------------ eye shape ----
-const EYE = { xi: 0.125, xo: 0.49, irisX: 0.312, irisY: -0.13, irisRX: 0.097, irisRY: 0.14 };
+// ------------------------------------------------------------------ eyes ----
+const EYE = { xi: 0.115, xo: 0.505, irisX: 0.31, irisY: -0.235, irisRX: 0.113, irisRY: 0.158 };
 
 function upperLid(t) {
   t = clamp(t, 0, 1);
-  return mix(-0.12, -0.08, t) + 0.155 * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.9)), 0.7);
+  return mix(-0.215, -0.175, t) + 0.19 * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.88)), 0.62);
 }
 function lowerLid(t) {
   t = clamp(t, 0, 1);
-  return mix(-0.165, -0.125, t) - 0.165 * Math.pow(Math.sin(Math.PI * Math.pow(t, 1.1)), 0.9);
+  return mix(-0.26, -0.22, t) - 0.18 * Math.pow(Math.sin(Math.PI * Math.pow(t, 1.08)), 0.85);
 }
 const eyeT = (ex) => (ex - EYE.xi) / (EYE.xo - EYE.xi);
 const eyeX = (t) => EYE.xi + t * (EYE.xo - EYE.xi);
 
-function buildEyeStrokes() {
+function buildStrokes() {
   const lash = [];
-  for (let i = 0; i <= 24; i++) {
-    const t = -0.03 + i / 24 * 1.03;
-    const r = 0.006 + 0.014 * Math.pow(clamp(t, 0, 1), 0.8);
-    lash.push([eyeX(t), upperLid(t) + r * 0.75, r]);
+  for (let i = 0; i <= 28; i++) {
+    const t = -0.03 + i / 28 * 1.03;
+    const r = 0.007 + 0.015 * Math.pow(clamp(t, 0, 1), 0.7);
+    lash.push([eyeX(t), upperLid(t) + r * 0.7, r]);
   }
   const yEnd = upperLid(1);
-  lash.push([EYE.xo + 0.025, yEnd - 0.012, 0.014], [EYE.xo + 0.055, yEnd - 0.05, 0.004]);
-  // Two small lash flicks at the outer corner.
-  const flickA = [[eyeX(0.86), upperLid(0.86) + 0.02, 0.01], [eyeX(0.95) + 0.03, upperLid(0.86) + 0.055, 0.002]];
-  const flickB = [[eyeX(0.95), upperLid(0.95) + 0.015, 0.009], [EYE.xo + 0.05, upperLid(0.95) + 0.03, 0.002]];
-
+  lash.push([EYE.xo + 0.022, yEnd - 0.01, 0.015], [EYE.xo + 0.05, yEnd - 0.045, 0.004]);
+  const flicks = [
+    [[eyeX(0.8), upperLid(0.8) + 0.022, 0.011], [eyeX(0.9) + 0.035, upperLid(0.8) + 0.07, 0.002]],
+    [[eyeX(0.93), upperLid(0.93) + 0.018, 0.01], [EYE.xo + 0.055, upperLid(0.93) + 0.045, 0.002]],
+    [[eyeX(0.99), upperLid(1) + 0.008, 0.008], [EYE.xo + 0.07, upperLid(1) + 0.012, 0.002]],
+  ];
   const lower = [];
-  for (let i = 0; i <= 12; i++) {
-    const t = 0.5 + i / 12 * 0.5;
-    lower.push([eyeX(t), lowerLid(t) - 0.004, 0.0015 + 0.0035 * Math.sin(Math.PI * (t - 0.5) * 1.6)]);
+  for (let i = 0; i <= 14; i++) {
+    const t = 0.35 + i / 14 * 0.65;
+    lower.push([eyeX(t), lowerLid(t) - 0.005, 0.0012 + 0.004 * Math.pow(Math.sin(Math.PI * (t - 0.35) / 0.65 * 0.9), 1.2)]);
   }
   const crease = [];
-  for (let i = 0; i <= 12; i++) {
-    const t = 0.28 + i / 12 * 0.7;
-    crease.push([eyeX(t) + 0.01, upperLid(t) + 0.055 + 0.01 * t, 0.0022 * Math.sin(Math.PI * (i / 12)) + 0.0006]);
+  for (let i = 0; i <= 14; i++) {
+    const t = 0.25 + i / 14 * 0.72;
+    crease.push([eyeX(t) + 0.008, upperLid(t) + 0.06 + 0.008 * t, 0.0026 * Math.sin(Math.PI * (i / 14)) + 0.0006]);
   }
-  const brow = [[0.13, 0.215, 0.006], [0.2, 0.245, 0.011], [0.31, 0.255, 0.01], [0.44, 0.225, 0.006], [0.49, 0.2, 0.002]];
-  return { lash, flickA, flickB, lower, crease, brow };
+  const brow = [[0.12, 0.085, 0.005], [0.2, 0.115, 0.01], [0.31, 0.125, 0.0095], [0.43, 0.1, 0.006], [0.49, 0.075, 0.002]];
+  return { lash, flicks, lower, crease, brow };
 }
+const S = buildStrokes();
 
-function paintEye(c, X, Y, pal, S, aa) {
+function paintEye(c, X, Y, pal, aa) {
   const side = X < 0 ? -1 : 1;
   const ex = Math.abs(X);
-  if (ex < 0.05 || ex > 0.6 || Y < -0.4 || Y > 0.32) return;
+  if (ex < 0.04 || ex > 0.62 || Y < -0.5 || Y > 0.2) return;
   const cov = (d) => clamp(0.5 - d / aa, 0, 1);
-
   const t = eyeT(ex);
   const yU = upperLid(t), yL = lowerLid(t);
   const open = Math.max(Y - yU, yL - Y, EYE.xi - ex, ex - EYE.xo);
 
-  // Brow and crease first (they sit under the lash line).
-  blend(c, pal.brow, cov(strokeDist(ex, Y, S.brow)) * 0.95);
-  blend(c, pal.crease, cov(strokeDist(ex, Y, S.crease)) * 0.8);
-  // Soft eyelid shading above the lash line.
-  blend(c, pal.skinShade, smoothstep(0.07, 0.0, Y - yU) * (Y > yU ? 1 : 0) * smoothstep(-0.02, 0.1, t) * smoothstep(1.05, 0.8, t) * 0.35);
+  blend(c, pal.brow, cov(strokeDist(ex, Y, S.brow)) * 0.9);
+  blend(c, pal.crease, cov(strokeDist(ex, Y, S.crease)) * 0.85);
+  // Warm eyelid shadow (soft).
+  if (Y > yU) blend(c, pal.skinShade, smoothstep(0.08, 0.0, Y - yU) * smoothstep(-0.05, 0.12, t) * smoothstep(1.08, 0.8, t) * 0.45);
 
   const inside = cov(open);
   if (inside > 0) {
-    const e = [0, 0, 0];
-    // Sclera with the upper lid's cast shadow.
-    e[0] = pal.sclera[0]; e[1] = pal.sclera[1]; e[2] = pal.sclera[2];
-    blend(e, pal.scleraShade, smoothstep(0.09, 0.0, yU - Y) * 0.8);
-
-    // Iris (not mirrored: both highlights point to the same light).
+    const e = pal.sclera.slice();
+    blend(e, pal.scleraShade, smoothstep(0.1, 0.0, yU - Y) * 0.85);
     const ix = (ex - EYE.irisX) / EYE.irisRX, iy = (Y - EYE.irisY) / EYE.irisRY;
     const q = Math.hypot(ix, iy);
     const icov = cov((q - 1) * EYE.irisRX);
     if (icov > 0) {
-      const g = clamp((iy + 1) / 2, 0, 1); // 0 bottom .. 1 top
+      const g = clamp((iy + 1) / 2, 0, 1);
       const ir = [0, 0, 0];
-      for (let k = 0; k < 3; k++) {
-        ir[k] = g > 0.5 ? mix(pal.irisMid[k], pal.irisTop[k], (g - 0.5) * 2) : mix(pal.irisBottom[k], pal.irisMid[k], g * 2);
-      }
+      for (let k = 0; k < 3; k++) ir[k] = g > 0.45 ? mix(pal.irisMid[k], pal.irisTop[k], (g - 0.45) / 0.55) : mix(pal.irisBottom[k], pal.irisMid[k], g / 0.45);
       const ang = Math.atan2(iy, ix);
-      const fib = 0.93 + 0.07 * Math.sin(ang * 23) * Math.sin(ang * 7 + 1.3);
-      for (let k = 0; k < 3; k++) ir[k] *= fib;
-      // Glowing lower crescent.
-      blend(ir, pal.irisGlow, smoothstep(0.35, 0.75, q) * smoothstep(1.0, 0.8, q) * smoothstep(-0.1, -0.7, iy) * 0.75);
-      // Pupil.
-      const pq = Math.hypot((ex - EYE.irisX) / 0.042, (Y - EYE.irisY - 0.012) / 0.066);
-      blend(ir, pal.pupil, cov((pq - 1) * 0.042) * 0.92);
-      // Dark rim + lid shadow across the top of the iris.
-      blend(ir, pal.irisTop, smoothstep(0.8, 1.0, q) * 0.85);
-      blend(ir, pal.pupil, smoothstep(0.1, 0.0, yU - Y) * 0.55);
+      const fib = 0.92 + 0.08 * Math.sin(ang * 26) * Math.sin(ang * 9 + 1.3);
+      for (let k = 0; k < 3; k++) ir[k] *= mix(1, fib, smoothstep(0.3, 0.8, q));
+      // Glowing lower crescent + sparkle ring.
+      blend(ir, pal.irisGlow, smoothstep(0.3, 0.72, q) * smoothstep(1.0, 0.78, q) * smoothstep(-0.05, -0.75, iy) * 0.85);
+      // Pupil (soft, heart of the eye).
+      const pq = Math.hypot((ex - EYE.irisX) / 0.048, (Y - EYE.irisY - 0.015) / 0.074);
+      blend(ir, pal.pupil, cov((pq - 1) * 0.048) * 0.9);
+      blend(ir, pal.irisTop, smoothstep(0.82, 1.0, q) * 0.9);
+      blend(ir, pal.pupil, smoothstep(0.12, 0.0, yU - Y) * 0.6);
       blend(e, ir, icov);
     }
-    // Highlights (world-space offsets so both eyes are lit from the same side).
+    // Highlights: big soft one, sharp dot, and a small reflected one below.
     const cx = side * EYE.irisX;
-    const h1 = Math.hypot((X - (cx - 0.036)) / 0.034, (Y - (EYE.irisY + 0.052)) / 0.044);
-    const h2 = Math.hypot((X - (cx + 0.045)) / 0.016, (Y - (EYE.irisY - 0.075)) / 0.016);
-    const h3 = Math.hypot((X - (cx + 0.02)) / 0.01, (Y - (EYE.irisY + 0.085)) / 0.01);
-    blend(e, [1, 1, 1], cov((h1 - 1) * 0.034));
-    blend(e, [1, 1, 1], cov((h2 - 1) * 0.016) * 0.95);
-    blend(e, [1, 1, 1], cov((h3 - 1) * 0.01) * 0.9);
+    const h1 = Math.hypot((X - (cx - 0.04)) / 0.04, (Y - (EYE.irisY + 0.06)) / 0.05);
+    const h2 = Math.hypot((X - (cx + 0.05)) / 0.018, (Y - (EYE.irisY - 0.085)) / 0.018);
+    const h3 = Math.hypot((X - (cx + 0.035)) / 0.012, (Y - (EYE.irisY + 0.095)) / 0.012);
+    const h4 = Math.hypot((X - (cx - 0.06)) / 0.02, (Y - (EYE.irisY - 0.05)) / 0.03);
+    blend(e, [1, 1, 1], cov((h1 - 1) * 0.04));
+    blend(e, [1, 1, 1], cov((h2 - 1) * 0.018) * 0.95);
+    blend(e, [1, 1, 1], cov((h3 - 1) * 0.012) * 0.9);
+    blend(e, [1, 0.92, 0.98], cov((h4 - 1) * 0.02) * 0.45);
     blend(c, e, inside);
   }
-  // Pink inner corner.
-  blend(c, [0.93, 0.6, 0.6], cov(Math.hypot(ex - EYE.xi - 0.006, Y - (lowerLid(0) + upperLid(0)) / 2) - 0.012) * 0.7);
-  // Lash lines on top.
+  blend(c, [0.95, 0.62, 0.64], cov(Math.hypot(ex - EYE.xi - 0.006, Y - (lowerLid(0) + upperLid(0)) / 2) - 0.012) * 0.7);
   blend(c, pal.lowerLash, cov(strokeDist(ex, Y, S.lower)));
   blend(c, pal.lash, cov(strokeDist(ex, Y, S.lash)));
-  blend(c, pal.lash, cov(strokeDist(ex, Y, S.flickA)));
-  blend(c, pal.lash, cov(strokeDist(ex, Y, S.flickB)));
+  for (const f of S.flicks) blend(c, pal.lash, cov(strokeDist(ex, Y, f)));
 }
 
-function paintFace(c, X, Y, pal, S, aa) {
+function paintMouth(c, X, Y, pal, aa) {
+  if (Math.abs(X) > 0.12 || Y > -0.55 || Y < -0.72) return;
+  const cov = (d) => clamp(0.5 - d / aa, 0, 1);
+  // Small open smile: gently curved top edge, round bottom.
+  const hw = 0.062;
+  const yTop = -0.608 + 0.018 * (X / hw) ** 2;
+  const u = clamp(Math.abs(X) / hw, 0, 1);
+  const yBot = -0.612 - 0.058 * Math.pow(1 - u * u, 0.6);
+  const inside = Math.max(Y - yTop, yBot - Y, Math.abs(X) - hw);
+  const m = cov(inside);
+  if (m > 0) {
+    const col = pal.mouthIn.slice();
+    blend(col, pal.mouth, smoothstep(-0.03, 0.0, Y - yTop) * 0.8);
+    const tq = Math.hypot(X / 0.042, (Y + 0.662) / 0.026);
+    blend(col, pal.tongue, cov((tq - 1) * 0.026));
+    blend(c, col, m);
+  }
+  // Outline + little corner ticks.
+  const top = [];
+  for (let i = 0; i <= 12; i++) { const x = -hw - 0.006 + i / 12 * (2 * hw + 0.012); top.push([x, -0.608 + 0.018 * Math.min(1.2, (x / hw) ** 2), 0.0038]); }
+  blend(c, pal.mouth, cov(strokeDist(X, Y, top)));
+  const bot = [];
+  for (let i = 0; i <= 12; i++) { const x = -hw + i / 12 * 2 * hw; const uu = Math.abs(x) / hw; bot.push([x, -0.612 - 0.058 * Math.pow(Math.max(0, 1 - uu * uu), 0.6), 0.0018]); }
+  blend(c, pal.mouth, cov(strokeDist(X, Y, bot)) * 0.8);
+}
+
+function paintFace(c, X, Y, pal, aa) {
   const cov = (d) => clamp(0.5 - d / aa, 0, 1);
   const ax = Math.abs(X);
-  // Blush with a few diagonal hatch strokes.
-  const bq = ((ax - 0.37) / 0.15) ** 2 + ((Y + 0.39) / 0.07) ** 2;
-  blend(c, pal.blush, Math.exp(-bq * 1.6) * 0.42);
-  for (let i = 0; i < 4; i++) {
-    const hx = 0.30 + i * 0.045;
-    const d = strokeDist(ax, Y, [[hx + 0.012, -0.37, 0.0035], [hx - 0.014, -0.41, 0.001]]);
-    blend(c, [0.94, 0.45, 0.52], cov(d) * 0.55);
+  const bq = ((ax - 0.38) / 0.16) ** 2 + ((Y + 0.47) / 0.075) ** 2;
+  blend(c, pal.blush, Math.exp(-bq * 1.5) * 0.5);
+  for (let i = 0; i < 3; i++) {
+    const hx = 0.33 + i * 0.05;
+    const d = strokeDist(ax, Y, [[hx + 0.013, -0.448, 0.0035], [hx - 0.013, -0.49, 0.0012]]);
+    blend(c, [0.96, 0.48, 0.56], cov(d) * 0.6);
   }
-  paintEye(c, X, Y, pal, S, aa);
-  // Nose: small dot of shade under the tip.
-  blend(c, pal.nose, cov(Math.hypot((X - 0.008) / 0.014, (Y + 0.455) / 0.006) - 1) * 0.7);
-  // Mouth: gentle smile.
-  const mouth = [[-0.068, -0.645, 0.0022], [-0.035, -0.658, 0.0036], [0, -0.661, 0.0042], [0.035, -0.658, 0.0036], [0.068, -0.645, 0.0022]];
-  blend(c, pal.mouth, cov(strokeDist(X, Y, mouth)));
-  blend(c, [1, 0.72, 0.72], Math.exp(-((X / 0.035) ** 2 + ((Y + 0.692) / 0.012) ** 2)) * 0.35);
+  paintEye(c, X, Y, pal, aa);
+  blend(c, pal.nose, cov(Math.hypot((X - 0.006) / 0.013, (Y + 0.5) / 0.0065) - 1) * 0.75);
+  paintMouth(c, X, Y, pal, aa);
 }
 
-// radius(theta, y): radial distance from the Y axis to the skin surface.
-function makeRadiusLookup(skin) {
-  const NT = 480, NY = 480, T0 = -1.5, T1 = 1.5, Y0 = -1.0, Y1 = 0.5;
-  const R = new Float32Array(NT * NY);
-  for (let j = 0; j < NY; j++) for (let i = 0; i < NT; i++) {
-    const th = T0 + (T1 - T0) * i / (NT - 1), y = Y0 + (Y1 - Y0) * j / (NY - 1);
-    const s = Math.sin(th), c = Math.cos(th);
-    let r = 1.6;
-    while (r > 0 && skin(s * r, y, c * r) > 0) r -= 0.02;
-    let lo = r, hi = r + 0.02;
-    for (let k = 0; k < 20; k++) { const m = (lo + hi) / 2; if (skin(s * m, y, c * m) > 0) hi = m; else lo = m; }
-    R[i + NT * j] = (lo + hi) / 2;
-  }
-  return (th, y) => {
-    if (th < T0 || th > T1 || y < Y0 || y > Y1) return null;
-    const fi = (th - T0) / (T1 - T0) * (NT - 1), fj = (y - Y0) / (Y1 - Y0) * (NY - 1);
-    const i = Math.min(NT - 2, fi | 0), j = Math.min(NY - 2, fj | 0), ti = fi - i, tj = fj - j;
-    const a = R[i + NT * j] * (1 - ti) + R[i + 1 + NT * j] * ti;
-    const b = R[i + NT * (j + 1)] * (1 - ti) + R[i + 1 + NT * (j + 1)] * ti;
-    return a * (1 - tj) + b * tj;
+function skinShader(over) {
+  const pal = palette(over);
+  return (ctx) => {
+    const c = pal.skin.slice();
+    const { p, n } = ctx;
+    blend(c, pal.skinShade, smoothstep(-0.8, -1.3, p[1]) * 0.3);
+    if (p[2] > 0.15 && n[2] > 0.05 && p[1] > -1 && p[1] < 0.4) paintFace(c, p[0], p[1], pal, 0.0024);
+    // Baked occlusion with a warm (subsurface-like) tint.
+    const ao = clamp(ctx.ao * 1.1, 0, 1);
+    c[0] *= mix(0.8, 1, ao); c[1] *= mix(0.6, 1, ao); c[2] *= mix(0.62, 1, ao);
+    return c;
   };
 }
 
-function paintSkin(size, skin, palette = {}) {
-  const pal = {};
-  for (const [k, v] of Object.entries(Object.assign({}, DEFAULT_PALETTE, palette))) pal[k] = hex(v);
-  const S = buildEyeStrokes();
-  const radius = makeRadiusLookup(skin);
-  const out = new Uint8Array(size * size * 4);
-  const aa = 0.0022;
-  const c = [0, 0, 0];
-  for (let py = 0; py < size; py++) {
-    const v = 1 - (py + 0.5) / size; // glTF: v=0 is the top row of the image
-    const y = vToY(v);
-    for (let px = 0; px < size; px++) {
-      const th = uToTheta((px + 0.5) / size);
-      c[0] = pal.skin[0]; c[1] = pal.skin[1]; c[2] = pal.skin[2];
-      // Slightly warmer, deeper tone on the neck/underside.
-      blend(c, pal.skinShade, smoothstep(-0.9, -1.4, y) * 0.35);
-      const r = radius(th, y);
-      if (r !== null && Math.abs(th) < 1.4) paintFace(c, r * Math.sin(th), y, pal, S, aa);
-      const o = 4 * (py * size + px);
-      out[o] = clamp(c[0] * 255 + 0.5, 0, 255); out[o + 1] = clamp(c[1] * 255 + 0.5, 0, 255);
-      out[o + 2] = clamp(c[2] * 255 + 0.5, 0, 255); out[o + 3] = 255;
+const hash = (a, b = 0) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
+
+function hairShader(over) {
+  const pal = palette(over);
+  return (ctx) => {
+    const { p } = ctx;
+    const ao = clamp(ctx.ao * 1.1, 0, 1);
+    if (ctx.id < -0.5) { // scalp cap
+      const c = mix3(pal.hairDark, pal.hair, 0.45);
+      return c.map((v) => v * mix(0.55, 1, ao));
     }
-  }
-  return out;
-}
-
-// 1D value noise (periodic) for hair streaks.
-function periodicNoise(seed, cells) {
-  const vals = new Float32Array(cells);
-  let s = seed;
-  for (let i = 0; i < cells; i++) { s = (s * 1103515245 + 12345) >>> 0; vals[i] = (s >>> 8) / 16777216; }
-  return (u) => {
-    const f = ((u % 1) + 1) % 1 * cells, i = Math.floor(f), t = f - i;
-    const a = vals[i % cells], b = vals[(i + 1) % cells];
-    const w = t * t * (3 - 2 * t);
-    return a + (b - a) * w;
-  };
-}
-
-function paintHair(size, palette = {}) {
-  const pal = {};
-  for (const [k, v] of Object.entries(Object.assign({}, DEFAULT_PALETTE, palette))) pal[k] = hex(v);
-  const n1 = periodicNoise(11, 220), n2 = periodicNoise(23, 70), n3 = periodicNoise(37, 140), n4 = periodicNoise(41, 90);
-  const out = new Uint8Array(size * size * 4);
-  const c = [0, 0, 0];
-  for (let py = 0; py < size; py++) {
-    const y = vToY(1 - (py + 0.5) / size);
-    for (let px = 0; px < size; px++) {
-      const u = (px + 0.5) / size;
-      const streak = 0.6 * n1(u) + 0.4 * n2(u);
-      c[0] = pal.hair[0]; c[1] = pal.hair[1]; c[2] = pal.hair[2];
-      // Lighter crown, darker toward the ends; streaks follow the fall of the hair.
-      blend(c, pal.hairLight, smoothstep(0.3, 1.1, y) * 0.45 + (streak - 0.5) * 0.25);
-      blend(c, pal.hairDark, smoothstep(0.1, -0.9, y) * 0.35 + (0.5 - streak) * 0.2);
-      // "Angel ring": a band of spindle-shaped highlight strokes, one per column cell.
-      const thU = uToTheta(((u % 1) + 1) % 1), K = 110;
-      const cell = Math.floor((thU / (2 * Math.PI) + 0.5) * K), lx = (thU / (2 * Math.PI) + 0.5) * K - cell - 0.5;
-      const hsh = (k) => { const x = Math.sin((cell % K) * 12.9898 + k * 78.233) * 43758.5453; return x - Math.floor(x); };
-      const len = 0.05 + 0.09 * hsh(1), yc = 0.56 + 0.035 * Math.sin(u * Math.PI * 6) + (hsh(2) - 0.5) * 0.05;
-      const yy = (y - yc) / len;
-      if (Math.abs(yy) < 1 && hsh(3) > 0.12) {
-        const half = (0.14 + 0.22 * hsh(4)) * Math.pow(1 - yy * yy, 0.8);
-        blend(c, pal.hairShine, smoothstep(half, half - 0.12, Math.abs(lx)) * (0.65 + 0.3 * hsh(5)));
+    const id = Math.round(ctx.id), t = ctx.t, ang = ctx.a * 2 * Math.PI;
+    const across = Math.cos(ang), up = Math.sin(ang); // across: -1..1 edge to edge; up>0 = outer face
+    const c = pal.hair.slice();
+    blend(c, pal.hairDark, smoothstep(0.25, 0.0, t) * 0.5);
+    blend(c, pal.hairLight, smoothstep(0.55, 1.0, t) * 0.4);
+    // Strand lines running along the clump.
+    const s = Math.sin(across * 9 + id * 1.7) * 0.5 + Math.sin(across * 23 + id * 3.1) * 0.3;
+    for (let k = 0; k < 3; k++) c[k] *= 1 + 0.06 * s;
+    // Darker edges and underside: gives each clump a readable silhouette.
+    blend(c, pal.hairDark, smoothstep(0.55, 1.0, Math.abs(across)) * 0.35 + (up < 0 ? 0.35 : 0));
+    // Angel ring: spindle strokes in a band around the skull.
+    if (up > 0) {
+      const el = Math.atan2(p[1] - 0.12, Math.hypot(p[0], p[2] + 0.08)) * 180 / Math.PI;
+      const lane = Math.floor((across + 1) * 2.5), lx = (across + 1) * 2.5 - lane - 0.5;
+      const r1 = hash(id, lane), r2 = hash(id + 17, lane);
+      const cen = 44 + (r1 - 0.5) * 8, half = 5 + 6 * r2;
+      const yy = (el - cen) / half;
+      if (Math.abs(yy) < 1 && r1 > 0.15) {
+        const w = (0.18 + 0.2 * r2) * Math.pow(1 - yy * yy, 0.7);
+        blend(c, pal.hairShine, smoothstep(w, w - 0.1, Math.abs(lx)) * 0.85);
       }
-      const o = 4 * (py * size + px);
-      out[o] = clamp(c[0] * 255 + 0.5, 0, 255); out[o + 1] = clamp(c[1] * 255 + 0.5, 0, 255);
-      out[o + 2] = clamp(c[2] * 255 + 0.5, 0, 255); out[o + 3] = 255;
     }
-  }
-  return out;
+    return c.map((v) => v * mix(0.5, 1, ao));
+  };
 }
 
-module.exports = { paintSkin, paintHair, DEFAULT_PALETTE };
+function mix3(a, b, t) { return [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)]; }
+
+module.exports = { skinShader, hairShader, DEFAULT_PALETTE };

@@ -29,11 +29,11 @@ const server = http.createServer((req, res) => {
   await page.goto(`http://localhost:${port}/viewer/index.html?src=/output/anime_head.glb`);
   await page.waitForFunction(() => window.__ready && window.__ready(), null, { timeout: 120000 });
   await page.evaluate(() => { document.querySelector('.ui').style.display = 'none'; });
-  const shots = { front: [0, 0.05], three: [0.65, 0.12], side: [Math.PI / 2, 0.05], back: [Math.PI, 0.15], low: [0.3, -0.35], top: [0.2, 0.7] };
+  const shots = { front: [0, 0.05, 0], three: [0.65, 0.12, 0], side: [Math.PI / 2, 0.05, 0], back: [Math.PI, 0.15, 0], wire: [0.5, 0.12, 2], wirefront: [0, 0.05, 2], low: [0.3, -0.35, 0], top: [0.2, 0.7, 0] };
   const only = process.env.VIEWS ? process.env.VIEWS.split(',') : Object.keys(shots);
   for (const name of only) {
-    const [y, p] = shots[name];
-    await page.evaluate(([y, p]) => window.__setView(y, p, 0), [y, p]);
+    const [y, p, m] = shots[name];
+    await page.evaluate(([y, p, m]) => window.__setView(y, p, m), [y, p, m]);
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(OUT, `${name}.png`) });
     console.log('saved', name);
