@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BIOHAZARD 洋館脱出</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Shippori+Mincho:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="scan"></div>
+<div id="vignette"></div>
+<div id="flash"></div>
+
+<div id="hud" class="hidden">
+  <div id="roomname"></div>
+  <div id="status"><canvas id="ecg" width="150" height="44"></canvas><span id="cond">FINE</span></div>
+  <div id="weapon"><span id="wname">HANDGUN</span><span id="ammo">15 / 0</span><span id="reloading">RELOADING</span></div>
+  <div id="prompt"></div>
+  <div id="toast"></div>
+</div>
+
+<div id="fade"></div>
+
+<div id="title" class="screen">
+  <div class="logo">BIOHAZARD</div>
+  <div class="sub">― 洋館脱出 ―</div>
+  <div class="press">PRESS ENTER / TAP TO START</div>
+  <div id="titlehint" class="controls">
+    <div><b>W A S D / 矢印</b> 移動（ラジコン操作）</div>
+    <div><b>Shift</b> 走る　<b>Shift+↓</b> クイックターン</div>
+    <div><b>Space / 右クリック</b> 構える</div>
+    <div><b>F / Enter / 左クリック</b> 撃つ（構えずに押すと自動で構える）</div>
+    <div><b>E</b> 調べる・拾う・扉　<b>R</b> リロード　<b>Q</b> 武器切替</div>
+    <div><b>H</b> ハーブ使用　<b>Tab</b> アイテム　<b>P / Esc</b> ポーズ</div>
+  </div>
+</div>
+
+<div id="pause" class="screen hidden"><div class="big">PAUSE</div><div class="press">P / Esc / タップで再開</div></div>
+
+<div id="gameover" class="screen hidden">
+  <div class="dead">YOU DIED</div>
+  <div class="menu"><button id="btnretry">リトライ（部屋の入口から）<small>Enter</small></button><button id="btntitle">タイトルへ<small>Esc</small></button></div>
+</div>
+
+<div id="ending" class="screen hidden">
+  <div class="big escaped">ESCAPED</div>
+  <p class="epi">重い扉の向こうには、雨上がりの夜明けが広がっていた。<br>あなたは洋館からの脱出に成功した。</p>
+  <div id="stats"></div>
+  <div class="menu"><button id="btnend">タイトルへ<small>Enter</small></button></div>
+</div>
+
+<div id="note" class="screen hidden">
+  <div class="paper"><h2 id="notetitle"></h2><pre id="notebody"></pre><div class="hint">E / Enter / タップで閉じる</div></div>
+</div>
+
+<div id="inventory" class="screen hidden">
+  <div class="inv">
+    <div class="invhead">
+      <div class="cond"><canvas id="invecg" width="220" height="60"></canvas><div><span id="invcond">FINE</span><div class="hpbar"><i id="invhp"></i></div></div></div>
+      <button id="invclose">×</button>
+    </div>
+    <ul id="invlist"></ul>
+    <div id="invdesc"></div>
+    <div class="hint">↑↓ 選択　Enter/E 使う・読む　Tab 閉じる</div>
+  </div>
+</div>
+
+<div id="touch" class="hidden">
+  <div id="stick"><div id="knob"></div></div>
+  <div class="tbtns">
+    <button data-k="TouchAim" data-hold>構え</button>
+    <button data-k="TouchFire" class="fire">撃つ</button>
+    <button data-k="TouchUse">調べる</button>
+    <button data-k="TouchRun" data-hold>走る</button>
+    <button data-k="KeyR">装填</button>
+    <button data-k="TouchMenu">MENU</button>
+  </div>
+</div>
+
+<script src="js/math.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/world.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
