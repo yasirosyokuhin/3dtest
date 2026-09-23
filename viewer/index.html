@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anime Head Viewer</title>
+<style>
+  :root { --bg: #eef0f5; --bg2: #d9dde8; --fg: #2a2d38; --panel: rgba(255,255,255,.72); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #20222b; --bg2: #14151b; --fg: #e6e8ef; --panel: rgba(30,32,40,.72); } }
+  :root[data-theme="dark"] { --bg: #20222b; --bg2: #14151b; --fg: #e6e8ef; --panel: rgba(30,32,40,.72); }
+  html, body { margin: 0; height: 100%; background: radial-gradient(circle at 50% 35%, var(--bg), var(--bg2)); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  .ui { position: fixed; left: 16px; bottom: 16px; right: 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ui button, .ui label { background: var(--panel); color: var(--fg); border: 1px solid rgba(128,128,128,.3); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; backdrop-filter: blur(6px); }
+  .msg { position: fixed; top: 16px; left: 16px; right: 16px; opacity: .75; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="msg" id="msg">Loading…</div>
+<div class="ui">
+  <button data-view="front">Front</button>
+  <button data-view="three">3/4</button>
+  <button data-view="side">Side</button>
+  <button data-view="back">Back</button>
+  <button id="shade">Shading: anime</button>
+  <button id="spin">Spin: off</button>
+  <label>GLB… <input type="file" id="file" accept=".glb" hidden></label>
+</div>
+<script>
+'use strict';
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true, alpha: true });
+const msg = document.getElementById('msg');
+
+const VS = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNor; layout(location=2) in vec2 aUV; layout(location=3) in vec4 aCol;
+uniform mat4 uMVP, uModel; out vec3 vN; out vec2 vUV; out vec4 vCol; out vec3 vW;
+void main(){ vec4 w = uModel * vec4(aPos,1.); vW = w.xyz; vN = mat3(uModel) * aNor; vUV = aUV; vCol = aCol; gl_Position = uMVP * vec4(aPos,1.); }`;
+const FS = `#version 300 es
+precision highp float;
+in vec3 vN; in vec2 vUV; in vec4 vCol; in vec3 vW; out vec4 o;
+uniform sampler2D uTex; uniform vec3 uEye; uniform int uMode; uniform float uRough;
+vec3 toLin(vec3 c){ return pow(c, vec3(2.2)); }
+void main(){
+  vec3 base = toLin(texture(uTex, vUV).rgb) * toLin(vCol.rgb);
+  vec3 N = normalize(vN); vec3 V = normalize(uEye - vW);
+  vec3 L = normalize(vec3(-0.45, 0.65, 0.75));
+  float ndl = dot(N, L);
+  vec3 col;
+  if (uMode == 0) {
+    // Soft two-tone anime shading with a warm shadow tint and rim light.
+    float t = smoothstep(-0.05, 0.25, ndl);
+    vec3 shadow = base * vec3(0.78, 0.66, 0.72);
+    col = mix(shadow, base, t);
+    float rim = pow(1. - max(dot(N, V), 0.), 4.) * smoothstep(-0.2, 0.4, ndl + 0.3);
+    col += rim * 0.18 * base;
+  } else {
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.), mix(64., 8., uRough)) * (1. - uRough) * 0.35;
+    float hemi = 0.5 + 0.5 * N.y;
+    col = base * (0.95 * max(ndl, 0.) + mix(vec3(0.25,0.22,0.24), vec3(0.42,0.44,0.5), hemi)) + spec;
+  }
+  o = vec4(pow(col, vec3(1./2.2)), 1.);
+}`;
+
+function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s); return s; }
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+const U = n => gl.getUniformLocation(prog, n);
+
+// --- tiny mat4 helpers (column-major) ---
+const M = {
+  mul(a, b) { const o = new Float32Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+r] * b[c*4+k]; o[c*4+r] = s; } return o; },
+  persp(f, asp, n, fa) { const t = 1 / Math.tan(f / 2); return new Float32Array([t/asp,0,0,0, 0,t,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0]); },
+  look(e, c, u) {
+    const z = norm([e[0]-c[0], e[1]-c[1], e[2]-c[2]]), x = norm(cross(u, z)), y = cross(z, x);
+    return new Float32Array([x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,e),-dot(y,e),-dot(z,e),1]);
+  },
+  scale(s) { return new Float32Array([s,0,0,0, 0,s,0,0, 0,0,s,0, 0,0,0,1]); },
+};
+function norm(v) { const l = Math.hypot(...v); return v.map(x => x / l); }
+function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+
+let draws = [], center = [0, 0, 0], radius = 1, rootScale = 1;
+async function loadGLB(buf) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('not a GLB');
+  const jl = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jl)));
+  const binOff = 20 + jl + 8;
+  const viewBytes = i => { const v = json.bufferViews[i]; return new Uint8Array(buf, binOff + (v.byteOffset || 0), v.byteLength); };
+  const textures = await Promise.all(json.images.map(async img => {
+    const bmp = await createImageBitmap(new Blob([viewBytes(img.bufferView)], { type: img.mimeType }), { imageOrientation: 'none' });
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }));
+  draws = [];
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const mesh of json.meshes) for (const p of mesh.primitives) {
+    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    const attr = (name, loc, size) => {
+      const a = json.accessors[p.attributes[name]];
+      if (!a) { gl.disableVertexAttribArray(loc); gl.vertexAttrib4f(loc, 1, 1, 1, 1); return; }
+      const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, viewBytes(a.bufferView), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, a.byteOffset || 0);
+      if (name === 'POSITION') for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], a.min[k]); hi[k] = Math.max(hi[k], a.max[k]); }
+    };
+    attr('POSITION', 0, 3); attr('NORMAL', 1, 3); attr('TEXCOORD_0', 2, 2); attr('COLOR_0', 3, 4);
+    const ia = json.accessors[p.indices];
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, viewBytes(ia.bufferView), gl.STATIC_DRAW);
+    const mat = json.materials[p.material];
+    const texIdx = mat.pbrMetallicRoughness.baseColorTexture.index;
+    draws.push({ vao, count: ia.count, tex: textures[json.textures[texIdx].source], rough: mat.pbrMetallicRoughness.roughnessFactor ?? 0.6 });
+  }
+  rootScale = (json.nodes[0].scale || [1])[0];
+  center = [0, (lo[1] + hi[1]) / 2 * 0.9 + 0.1, 0];
+  radius = Math.max(hi[0] - lo[0], hi[1] - lo[1]) * 0.5;
+  msg.textContent = '';
+}
+
+let yaw = 0, pitch = 0.05, dist = 4.3, mode = 0, spin = false, ready = false;
+const views = { front: [0, 0.05], three: [0.6, 0.1], side: [Math.PI / 2, 0.05], back: [Math.PI, 0.1] };
+document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { [yaw, pitch] = views[b.dataset.view]; });
+document.getElementById('shade').onclick = e => { mode ^= 1; e.target.textContent = 'Shading: ' + (mode ? 'lit' : 'anime'); };
+document.getElementById('spin').onclick = e => { spin = !spin; e.target.textContent = 'Spin: ' + (spin ? 'on' : 'off'); };
+document.getElementById('file').onchange = async e => { const f = e.target.files[0]; if (f) await loadGLB(await f.arrayBuffer()); };
+
+let drag = null;
+canvas.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e => { if (!drag) return; yaw -= (e.clientX - drag[0]) * 0.008; pitch = Math.max(-1.2, Math.min(1.2, pitch + (e.clientY - drag[1]) * 0.008)); drag = [e.clientX, e.clientY]; });
+canvas.addEventListener('pointerup', () => drag = null);
+canvas.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(1.6, Math.min(8, dist * Math.exp(e.deltaY * 0.001))); }, { passive: false });
+
+function frame() {
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const w = canvas.clientWidth * dpr | 0, h = canvas.clientHeight * dpr | 0;
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+  if (spin) yaw += 0.01;
+  if (draws.length) {
+    const R = radius * rootScale * dist, c = center.map(v => v * rootScale);
+    const eye = [c[0] + R * Math.sin(yaw) * Math.cos(pitch), c[1] + R * Math.sin(pitch), c[2] + R * Math.cos(yaw) * Math.cos(pitch)];
+    const vp = M.mul(M.persp(0.5, w / h, R * 0.1, R * 10), M.look(eye, c, [0, 1, 0]));
+    const model = M.scale(rootScale);
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(U('uMVP'), false, M.mul(vp, model)); gl.uniformMatrix4fv(U('uModel'), false, model);
+    gl.uniform3fv(U('uEye'), eye); gl.uniform1i(U('uMode'), mode); gl.uniform1i(U('uTex'), 0);
+    for (const d of draws) {
+      gl.bindVertexArray(d.vao); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, d.tex);
+      gl.uniform1f(U('uRough'), d.rough);
+      gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, 0);
+    }
+    ready = true;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+const params = new URLSearchParams(location.search);
+if (params.get('view') && views[params.get('view')]) [yaw, pitch] = views[params.get('view')];
+if (params.get('mode') === 'lit') mode = 1;
+fetch(params.get('src') || 'anime_head.glb').then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+  .then(loadGLB).catch(e => { msg.textContent = 'Could not load model (' + e.message + '). Use "GLB…" to open one.'; });
+window.__ready = () => ready;
+window.__setView = (y, p, m) => { yaw = y; pitch = p; if (m !== undefined) mode = m; };
+</script>
+</body>
+</html>
