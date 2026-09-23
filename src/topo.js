@@ -41,26 +41,36 @@ function headGrid(f, { cols = 112, rows = 104, bottomY = -1.25, iters = 80 } = {
   const A = [0, bottomY, -0.27];    // capsule bottom (inside the neck)
   const R = 1, hemi = Math.PI / 2 * R, cyl = B[1] - A[1];
   const total = hemi + cyl;
-  const P = []; // rows x cols (+ pole)
-  for (let r = 0; r < rows; r++) {
+  const init = (r, c) => {
     const s = (r + 1) / rows * total;
-    for (let c = 0; c < cols; c++) {
-      const th = (c / cols - 0.5) * 2 * Math.PI;
-      let o, dir;
-      if (s <= hemi) {
-        const phi = s / R;
-        o = B; dir = [Math.sin(phi) * Math.sin(th), Math.cos(phi), Math.sin(phi) * Math.cos(th)];
-      } else {
-        const t = (s - hemi) / cyl;
-        o = [0, B[1] + (A[1] - B[1]) * t, B[2] + (A[2] - B[2]) * t];
-        dir = [Math.sin(th), 0, Math.cos(th)];
-      }
-      const p = outerHit(f, o, dir);
-      if (r === rows - 1) p[1] = bottomY;
-      P.push(p);
+    const th = (c / cols - 0.5) * 2 * Math.PI;
+    if (s <= hemi) {
+      const phi = s / R;
+      return outerHit(f, B, [Math.sin(phi) * Math.sin(th), Math.cos(phi), Math.sin(phi) * Math.cos(th)]);
     }
+    const t = (s - hemi) / cyl;
+    return outerHit(f, [0, B[1] + (A[1] - B[1]) * t, B[2] + (A[2] - B[2]) * t], [Math.sin(th), 0, Math.cos(th)]);
+  };
+  return wrapGrid(f, { cols, rows, bottomY, iters, init, pole: outerHit(f, B, [0, 1, 0]) });
+}
+
+// Torso: rays from a point inside the chest, rows from the neck down to the cut.
+function torsoGrid(f, { cols = 96, rows = 56, bottomY = -2.75, iters = 80, center = [0, -1.8, -0.25] } = {}) {
+  const init = (r, c) => {
+    const th = (c / cols - 0.5) * 2 * Math.PI;
+    const el = (88 - (r + 1) / rows * 128) * Math.PI / 180;
+    return outerHit(f, center, [Math.cos(el) * Math.sin(th), Math.sin(el), Math.cos(el) * Math.cos(th)]);
+  };
+  return wrapGrid(f, { cols, rows, bottomY, iters, init, pole: outerHit(f, center, [0, 1, 0]) });
+}
+
+function wrapGrid(f, { cols, rows, bottomY, iters, init, pole }) {
+  const P = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const p = init(r, c);
+    if (r === rows - 1 || p[1] < bottomY) p[1] = bottomY;
+    P.push(p);
   }
-  const pole = outerHit(f, B, [0, 1, 0]);
   const idx = (r, c) => r * cols + ((c + cols) % cols);
 
   // Shrink-wrap relaxation: Laplacian step + projection back onto the surface.
@@ -121,4 +131,4 @@ function headGrid(f, { cols = 112, rows = 104, bottomY = -1.25, iters = 80 } = {
   };
 }
 
-module.exports = { headGrid, gradient, project };
+module.exports = { headGrid, torsoGrid, gradient, project, outerHit };

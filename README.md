@@ -1,4 +1,4 @@
-# Anime Head Generator（顔のみ・第1段階）
+# Anime Bust Generator（顔＋パーカーのバスト）
 
 Tripo のように **3Dメッシュ + テクスチャ** を出力する、アニメ調キャラクターの頭部ジェネレーターです。
 外部ライブラリなし（Node.js のみ）で動きます。
@@ -9,7 +9,8 @@ Tripo のように **3Dメッシュ + テクスチャ** を出力する、アニ
 
 | ファイル | 内容 |
 |---|---|
-| `output/anime_head.glb` | glTF 2.0 形式（約3MB、約45,000ポリゴン）。`Face` と `Hair` の2メッシュ・2マテリアルで、テクスチャは埋め込み済みです。頭頂からあごまで約24cm（m単位） |
+| `output/anime_head.glb` | glTF 2.0 形式（約4.6MB、約60,000ポリゴン）。`Face` / `Hair` / `Hoodie` / `Straps` の4メッシュ・4マテリアルで、テクスチャは埋め込み済みです。頭頂からあごまで約24cm（m単位） |
+| `output/anime_head_hoodie.png` | パーカー（胴体＋フード）のテクスチャ |
 | `output/anime_head_skin.png` | 顔のアルベドテクスチャ（2048²、AO焼き込み済み） |
 | `output/anime_head_hair.png` | 髪のアトラステクスチャ（2048²、房ごとに独立したUVアイランド、AOと天使の輪を焼き込み済み） |
 
@@ -37,6 +38,7 @@ npx http-server . -p 8080         # → http://localhost:8080/viewer/index.html?
 ## 構成
 
 - `src/head.js` 顔の造形（SDF）
+- `src/body.js` パーカーの胴体（クワッドグリッド）、フード、ひも、リュックのストラップ
 - `src/topo.js` クワッドグリッドのリトポロジー（シュリンクラップ＋緩和）
 - `src/hair.js` 房の成長、リボン状メッシュ、頭皮キャップ、UVアトラス
 - `src/bake.js` UV空間でのラスタライズによるテクスチャベイク（パディング付き）

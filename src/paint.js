@@ -7,11 +7,12 @@ const { clamp, mix, smoothstep } = require('./sdf');
 const hex = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 
 const DEFAULT_PALETTE = {
-  skin: '#fff0e8', skinShade: '#f5c6bc', blush: '#ff8ea4',
-  irisTop: '#241640', irisMid: '#6246b0', irisBottom: '#e896d8', irisGlow: '#ffe0f6', pupil: '#140c26',
-  sclera: '#ffffff', scleraShade: '#c7c3ea', lash: '#2b1616', lowerLash: '#8a4a48', crease: '#d49a90',
-  brow: '#7a4a3e', mouth: '#6e2432', mouthIn: '#b33a50', tongue: '#f58c98', nose: '#eaa296',
-  hairDark: '#4b2a26', hair: '#94604e', hairLight: '#c9927a', hairShine: '#fbe6d6',
+  skin: '#fff2ea', skinShade: '#f3c9bd', blush: '#ffa0a8',
+  irisTop: '#241008', irisMid: '#6a3a1a', irisBottom: '#d7903f', irisGlow: '#ffd99c', pupil: '#170804',
+  sclera: '#ffffff', scleraShade: '#e0d6dc', lash: '#1e1210', lowerLash: '#7c4b3c', crease: '#dca79c',
+  brow: '#5e3b2a', mouth: '#5a1f22', mouthIn: '#8c2b33', tongue: '#f2828c', nose: '#e8a292',
+  hairDark: '#2c1911', hair: '#5d3b29', hairLight: '#8b5d41', hairShine: '#c9a282',
+  hoodie: '#f5c535', hoodieShade: '#d99a1e', strap: '#1c1c21', strapEdge: '#34343c', buckle: '#8a8c93', cord: '#1b1b1f',
 };
 
 function palette(over = {}) {
@@ -39,15 +40,15 @@ function strokeDist(x, y, pts) {
 }
 
 // ------------------------------------------------------------------ eyes ----
-const EYE = { xi: 0.115, xo: 0.505, irisX: 0.31, irisY: -0.235, irisRX: 0.113, irisRY: 0.158 };
+const EYE = { xi: 0.12, xo: 0.5, irisX: 0.306, irisY: -0.245, irisRX: 0.126, irisRY: 0.163 };
 
 function upperLid(t) {
   t = clamp(t, 0, 1);
-  return mix(-0.215, -0.175, t) + 0.19 * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.88)), 0.62);
+  return mix(-0.225, -0.2, t) + 0.185 * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.92)), 0.5);
 }
 function lowerLid(t) {
   t = clamp(t, 0, 1);
-  return mix(-0.26, -0.22, t) - 0.18 * Math.pow(Math.sin(Math.PI * Math.pow(t, 1.08)), 0.85);
+  return mix(-0.275, -0.245, t) - 0.165 * Math.pow(Math.sin(Math.PI * Math.pow(t, 1.02)), 0.75);
 }
 const eyeT = (ex) => (ex - EYE.xi) / (EYE.xo - EYE.xi);
 const eyeX = (t) => EYE.xi + t * (EYE.xo - EYE.xi);
@@ -56,15 +57,14 @@ function buildStrokes() {
   const lash = [];
   for (let i = 0; i <= 28; i++) {
     const t = -0.03 + i / 28 * 1.03;
-    const r = 0.007 + 0.015 * Math.pow(clamp(t, 0, 1), 0.7);
+    const r = 0.011 + 0.013 * Math.pow(clamp(t, 0, 1), 0.6);
     lash.push([eyeX(t), upperLid(t) + r * 0.7, r]);
   }
   const yEnd = upperLid(1);
   lash.push([EYE.xo + 0.022, yEnd - 0.01, 0.015], [EYE.xo + 0.05, yEnd - 0.045, 0.004]);
   const flicks = [
-    [[eyeX(0.8), upperLid(0.8) + 0.022, 0.011], [eyeX(0.9) + 0.035, upperLid(0.8) + 0.07, 0.002]],
-    [[eyeX(0.93), upperLid(0.93) + 0.018, 0.01], [EYE.xo + 0.055, upperLid(0.93) + 0.045, 0.002]],
-    [[eyeX(0.99), upperLid(1) + 0.008, 0.008], [EYE.xo + 0.07, upperLid(1) + 0.012, 0.002]],
+    [[eyeX(0.9), upperLid(0.9) + 0.02, 0.01], [EYE.xo + 0.04, upperLid(0.9) + 0.045, 0.002]],
+    [[eyeX(0.99), upperLid(1) + 0.01, 0.009], [EYE.xo + 0.055, upperLid(1) + 0.005, 0.002]],
   ];
   const lower = [];
   for (let i = 0; i <= 14; i++) {
@@ -91,14 +91,14 @@ function paintEye(c, X, Y, pal, aa) {
   const open = Math.max(Y - yU, yL - Y, EYE.xi - ex, ex - EYE.xo);
 
   blend(c, pal.brow, cov(strokeDist(ex, Y, S.brow)) * 0.9);
-  blend(c, pal.crease, cov(strokeDist(ex, Y, S.crease)) * 0.85);
+  blend(c, pal.crease, cov(strokeDist(ex, Y, S.crease)) * 0.45);
   // Warm eyelid shadow (soft).
   if (Y > yU) blend(c, pal.skinShade, smoothstep(0.08, 0.0, Y - yU) * smoothstep(-0.05, 0.12, t) * smoothstep(1.08, 0.8, t) * 0.45);
 
   const inside = cov(open);
   if (inside > 0) {
     const e = pal.sclera.slice();
-    blend(e, pal.scleraShade, smoothstep(0.1, 0.0, yU - Y) * 0.85);
+    blend(e, pal.scleraShade, smoothstep(0.08, 0.0, yU - Y) * 0.7);
     const ix = (ex - EYE.irisX) / EYE.irisRX, iy = (Y - EYE.irisY) / EYE.irisRY;
     const q = Math.hypot(ix, iy);
     const icov = cov((q - 1) * EYE.irisRX);
@@ -112,15 +112,15 @@ function paintEye(c, X, Y, pal, aa) {
       // Glowing lower crescent + sparkle ring.
       blend(ir, pal.irisGlow, smoothstep(0.3, 0.72, q) * smoothstep(1.0, 0.78, q) * smoothstep(-0.05, -0.75, iy) * 0.85);
       // Pupil (soft, heart of the eye).
-      const pq = Math.hypot((ex - EYE.irisX) / 0.048, (Y - EYE.irisY - 0.015) / 0.074);
-      blend(ir, pal.pupil, cov((pq - 1) * 0.048) * 0.9);
+      const pq = Math.hypot((ex - EYE.irisX) / 0.055, (Y - EYE.irisY - 0.012) / 0.078);
+      blend(ir, pal.pupil, cov((pq - 1) * 0.055) * 0.85);
       blend(ir, pal.irisTop, smoothstep(0.82, 1.0, q) * 0.9);
       blend(ir, pal.pupil, smoothstep(0.12, 0.0, yU - Y) * 0.6);
       blend(e, ir, icov);
     }
     // Highlights: big soft one, sharp dot, and a small reflected one below.
     const cx = side * EYE.irisX;
-    const h1 = Math.hypot((X - (cx - 0.04)) / 0.04, (Y - (EYE.irisY + 0.06)) / 0.05);
+    const h1 = Math.hypot((X - (cx - 0.045)) / 0.045, (Y - (EYE.irisY + 0.06)) / 0.05);
     const h2 = Math.hypot((X - (cx + 0.05)) / 0.018, (Y - (EYE.irisY - 0.085)) / 0.018);
     const h3 = Math.hypot((X - (cx + 0.035)) / 0.012, (Y - (EYE.irisY + 0.095)) / 0.012);
     const h4 = Math.hypot((X - (cx - 0.06)) / 0.02, (Y - (EYE.irisY - 0.05)) / 0.03);
@@ -137,28 +137,28 @@ function paintEye(c, X, Y, pal, aa) {
 }
 
 function paintMouth(c, X, Y, pal, aa) {
-  if (Math.abs(X) > 0.12 || Y > -0.55 || Y < -0.72) return;
+  if (Math.abs(X) > 0.14 || Y > -0.55 || Y < -0.75) return;
   const cov = (d) => clamp(0.5 - d / aa, 0, 1);
   // Small open smile: gently curved top edge, round bottom.
-  const hw = 0.062;
-  const yTop = -0.608 + 0.018 * (X / hw) ** 2;
+  const hw = 0.088;
+  const yTop = -0.6 + 0.024 * (X / hw) ** 2;
   const u = clamp(Math.abs(X) / hw, 0, 1);
-  const yBot = -0.612 - 0.058 * Math.pow(1 - u * u, 0.6);
+  const yBot = -0.604 - 0.1 * Math.pow(1 - u * u, 0.55);
   const inside = Math.max(Y - yTop, yBot - Y, Math.abs(X) - hw);
   const m = cov(inside);
   if (m > 0) {
     const col = pal.mouthIn.slice();
     blend(col, pal.mouth, smoothstep(-0.03, 0.0, Y - yTop) * 0.8);
-    const tq = Math.hypot(X / 0.042, (Y + 0.662) / 0.026);
-    blend(col, pal.tongue, cov((tq - 1) * 0.026));
+    const tq = Math.hypot(X / 0.062, (Y + 0.69) / 0.04);
+    blend(col, pal.tongue, cov((tq - 1) * 0.04));
     blend(c, col, m);
   }
   // Outline + little corner ticks.
   const top = [];
-  for (let i = 0; i <= 12; i++) { const x = -hw - 0.006 + i / 12 * (2 * hw + 0.012); top.push([x, -0.608 + 0.018 * Math.min(1.2, (x / hw) ** 2), 0.0038]); }
+  for (let i = 0; i <= 12; i++) { const x = -hw - 0.006 + i / 12 * (2 * hw + 0.012); top.push([x, -0.6 + 0.024 * Math.min(1.2, (x / hw) ** 2), 0.004]); }
   blend(c, pal.mouth, cov(strokeDist(X, Y, top)));
   const bot = [];
-  for (let i = 0; i <= 12; i++) { const x = -hw + i / 12 * 2 * hw; const uu = Math.abs(x) / hw; bot.push([x, -0.612 - 0.058 * Math.pow(Math.max(0, 1 - uu * uu), 0.6), 0.0018]); }
+  for (let i = 0; i <= 12; i++) { const x = -hw + i / 12 * 2 * hw; const uu = Math.abs(x) / hw; bot.push([x, -0.604 - 0.1 * Math.pow(Math.max(0, 1 - uu * uu), 0.55), 0.0022]); }
   blend(c, pal.mouth, cov(strokeDist(X, Y, bot)) * 0.8);
 }
 
@@ -166,12 +166,7 @@ function paintFace(c, X, Y, pal, aa) {
   const cov = (d) => clamp(0.5 - d / aa, 0, 1);
   const ax = Math.abs(X);
   const bq = ((ax - 0.38) / 0.16) ** 2 + ((Y + 0.47) / 0.075) ** 2;
-  blend(c, pal.blush, Math.exp(-bq * 1.5) * 0.5);
-  for (let i = 0; i < 3; i++) {
-    const hx = 0.33 + i * 0.05;
-    const d = strokeDist(ax, Y, [[hx + 0.013, -0.448, 0.0035], [hx - 0.013, -0.49, 0.0012]]);
-    blend(c, [0.96, 0.48, 0.56], cov(d) * 0.6);
-  }
+  blend(c, pal.blush, Math.exp(-bq * 1.3) * 0.38);
   paintEye(c, X, Y, pal, aa);
   blend(c, pal.nose, cov(Math.hypot((X - 0.006) / 0.013, (Y + 0.5) / 0.0065) - 1) * 0.75);
   paintMouth(c, X, Y, pal, aa);
@@ -221,7 +216,7 @@ function hairShader(over) {
       const yy = (el - cen) / half;
       if (Math.abs(yy) < 1 && r1 > 0.15) {
         const w = (0.18 + 0.2 * r2) * Math.pow(1 - yy * yy, 0.7);
-        blend(c, pal.hairShine, smoothstep(w, w - 0.1, Math.abs(lx)) * 0.85);
+        blend(c, pal.hairShine, smoothstep(w, w - 0.1, Math.abs(lx)) * 0.55);
       }
     }
     return c.map((v) => v * mix(0.5, 1, ao));
@@ -230,4 +225,27 @@ function hairShader(over) {
 
 function mix3(a, b, t) { return [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)]; }
 
-module.exports = { skinShader, hairShader, DEFAULT_PALETTE };
+// Hoodie / accessories. part: 0 torso, 1 hood, 2 strap, 3 buckle, 4 cord.
+function clothShader(over) {
+  const pal = palette(over);
+  return (ctx) => {
+    const { p } = ctx;
+    const part = Math.round(ctx.part);
+    let c;
+    if (part <= 1) {
+      c = pal.hoodie.slice();
+      // Soft knit texture + gentle vertical folds.
+      const knit = Math.sin(p[0] * 260) * Math.sin(p[1] * 260) * 0.5 + 0.5;
+      const fold = Math.sin(p[0] * 7 + Math.sin(p[1] * 3) * 1.5) * 0.5 + 0.5;
+      blend(c, pal.hoodieShade, 0.05 * knit + 0.18 * fold * smoothstep(-1.9, -2.6, p[1]));
+      if (part === 1) blend(c, pal.hoodieShade, 0.04);
+    } else if (part === 2) c = pal.strap.slice();
+    else if (part === 3) c = pal.buckle.slice();
+    else c = pal.cord.slice();
+    const ao = clamp(ctx.ao * 1.1, 0, 1);
+    const a2 = part <= 1 ? mix(0.35, 1, ao) : ao; // fabric bounces a lot of light
+    return c.map((v, k) => v * mix(k === 0 ? 0.62 : 0.5, 1, a2));
+  };
+}
+
+module.exports = { skinShader, hairShader, clothShader, DEFAULT_PALETTE };

@@ -27,8 +27,8 @@ function skin(x, y, z) {
   // Ears.
   d = smin(d, ellipsoid(ax, y, z, 0.72, -0.25, -0.12, 0.09, 0.19, 0.12), 0.05);
   // Slender neck, blended softly; open cut at the bottom (bust).
-  d = smin(d, capsule(x * 0.94, y, z, 0, -0.45, -0.24, 0, -1.6, -0.3, 0.24, 0.34), 0.16);
-  d = smax(d, -1.25 - y, 0.02);
+  d = smin(d, capsule(x * 0.94, y, z, 0, -0.45, -0.24, 0, -1.9, -0.28, 0.24, 0.3), 0.16);
+  d = smax(d, -1.6 - y, 0.02); // buried in the hoodie collar
   return d;
 }
 

@@ -6,9 +6,10 @@ const path = require('path');
 const { skin } = require('./head');
 const { headGrid } = require('./topo');
 const { buildHair } = require('./hair');
+const { buildBody } = require('./body');
 const { sampleGrid, gridSampler } = require('./mesher');
 const { bakeTexture } = require('./bake');
-const { skinShader, hairShader } = require('./paint');
+const { skinShader, hairShader, clothShader } = require('./paint');
 const { encodePNG } = require('./png');
 const { writeGLB } = require('./glb');
 
@@ -18,7 +19,7 @@ const TEX = parseInt(args.tex || '2048', 10);
 const OUT = path.resolve(args.out || path.join(__dirname, '..', 'output'));
 const log = (...m) => console.log(`[${(process.uptime()).toFixed(1)}s]`, ...m);
 
-const BOUNDS = [-1.2, -1.62, -1.25, 1.2, 1.55, 1.25];
+const BOUNDS = [-1.85, -2.85, -1.45, 1.85, 1.6, 1.35];
 
 function bakeAO(mesh, scene, { rays = 32, maxDist = 0.55 } = {}) {
   const P = mesh.positions, N = mesh.normals, nv = P.length / 3;
@@ -68,28 +69,36 @@ function smoothScalar(mesh, val, iters) {
 
 function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  const face = headGrid(skin);
+  const face = headGrid(skin, { bottomY: -1.6 });
   log(`face: ${face.positions.length / 3} verts, ${face.indices.length / 3} tris (quad grid)`);
   const hair = buildHair();
   log(`hair: ${hair.strands.length} clumps, ${hair.positions.length / 3} verts, ${hair.indices.length / 3} tris`);
 
-  const sSkin = gridSampler(sampleGrid(skin, BOUNDS, RES));
-  const sHair = gridSampler(sampleGrid(hair.sdf, BOUNDS, RES));
-  const scene = (x, y, z) => Math.min(sSkin(x, y, z), sHair(x, y, z));
+  const body = buildBody();
+  log(`hoodie: ${body.hoodie.indices.length / 3} tris, accessories: ${body.acc.indices.length / 3} tris`);
+  const scene = gridSampler(sampleGrid((x, y, z) => Math.min(skin(x, y, z), hair.sdf(x, y, z), body.sdf(x, y, z)), BOUNDS, RES));
   const aoFace = smoothScalar(face, bakeAO(face, scene, { rays: 48 }), 3);
   const aoHair = smoothScalar(hair, bakeAO(hair, scene, { rays: 32 }), 2);
+  const aoHoodie = smoothScalar(body.hoodie, bakeAO(body.hoodie, scene, { rays: 32 }), 2);
+  const aoAcc = bakeAO(body.acc, scene, { rays: 24 });
   log('ambient occlusion baked');
 
   const skinTex = encodePNG(TEX, TEX, bakeTexture(face, { ao: aoFace }, TEX, skinShader()));
   log('face texture baked');
   const hairTex = encodePNG(TEX, TEX, bakeTexture(hair, { ao: aoHair, t: hair.attrs.t, a: hair.attrs.a, id: hair.attrs.id }, TEX, hairShader()));
   log('hair texture baked');
+  const hoodieTex = encodePNG(TEX, TEX, bakeTexture(body.hoodie, { ao: aoHoodie, part: body.hoodie.part }, TEX, clothShader()));
+  const accTex = encodePNG(512, 512, bakeTexture(body.acc, { ao: aoAcc, part: body.acc.part }, 512, clothShader()));
+  log('hoodie textures baked');
+  fs.writeFileSync(path.join(OUT, 'anime_head_hoodie.png'), hoodieTex);
   fs.writeFileSync(path.join(OUT, 'anime_head_skin.png'), skinTex);
   fs.writeFileSync(path.join(OUT, 'anime_head_hair.png'), hairTex);
 
   const meshes = [
     { name: 'Face', positions: face.positions, normals: face.normals, uvs: face.uvs, indices: face.indices, png: skinTex, roughness: 0.7 },
     { name: 'Hair', positions: hair.positions, normals: hair.normals, uvs: hair.uvs, indices: hair.indices, png: hairTex, roughness: 0.5 },
+    { name: 'Hoodie', positions: body.hoodie.positions, normals: body.hoodie.normals, uvs: body.hoodie.uvs, indices: body.hoodie.indices, png: hoodieTex, roughness: 0.85 },
+    { name: 'Straps', positions: body.acc.positions, normals: body.acc.normals, uvs: body.acc.uvs, indices: body.acc.indices, png: accTex, roughness: 0.6 },
   ];
   meshes.scale = 0.12; // ~24 cm crown-to-chin, in metres
   const glb = writeGLB(meshes);
